@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "1010563950783",
+    "project_id": "food-calories-scanner",
+    "storage_bucket": "food-calories-scanner.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1010563950783:android:ede514b182129d341a3e0a",
+        "android_client_info": {
+          "package_name": "com.example.food_ml"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB2VnJUugGpckklZSYX0jQYfO79JuB_eGI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1010563950783:android:f016bfe5ff86f19d1a3e0a",
+        "android_client_info": {
+          "package_name": "com.example.food_scanner"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB2VnJUugGpckklZSYX0jQYfO79JuB_eGI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
