@@ -52,7 +52,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _lastScanId;
 
   static const String FIREBASE_FUNCTION_URL = 
-      'https://us-central1-food-calories-scanner.cloudfunctions.net/food_analyzer/analyze-food';
+      'https://food-analyzer-pwtj4ty7sq-uc.a.run.app/analyze-food';
 
   Future<void> _pickImage(ImageSource source) async {
     try {
@@ -100,7 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
         body: jsonEncode({
           'image': base64Image,
         }),
-      ).timeout(Duration(seconds: 45));
+      ).timeout(Duration(seconds: 60));
 
       print('Response status: ${response.statusCode}');
 
