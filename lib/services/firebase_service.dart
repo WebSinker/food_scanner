@@ -301,11 +301,14 @@ class FirebaseService {
       DateTime startOfDay = DateTime(date.year, date.month, date.day);
       DateTime endOfDay = DateTime(date.year, date.month, date.day, 23, 59, 59);
       
+      // Use the same pattern as getUserScanHistory with proper ordering
       QuerySnapshot snapshot = await _firestore
           .collection(SCANS_COLLECTION)
           .where('userId', isEqualTo: userId)
           .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
           .where('timestamp', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
+          .orderBy('timestamp', descending: true)
+          .orderBy(FieldPath.documentId) // This uses __name__ field for consistent ordering
           .get()
           .timeout(Duration(seconds: 15));
       

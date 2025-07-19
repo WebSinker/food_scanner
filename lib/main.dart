@@ -43,16 +43,93 @@ class HomeScreen extends StatefulWidget {
   _HomeScreenState createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final ImagePicker _picker = ImagePicker();
+  final ScrollController _scrollController = ScrollController();
+  
   File? _selectedImage;
   bool _isAnalyzing = false;
   bool _isSaving = false;
   List<FoodResult> _results = [];
   String? _lastScanId;
-
+  
+  // Animation controllers for smooth UX
+  late AnimationController _buttonsAnimationController;
+  late AnimationController _imageAnimationController;
+  late Animation<double> _buttonsAnimation;
+  late Animation<double> _imageAnimation;
+  
+  bool _isImageCollapsed = false;
+  bool _areButtonsVisible = true;
+  bool _hasAnalyzedOnce = false; // New flag to track if analysis has been done
+  
   static const String FIREBASE_FUNCTION_URL = 
       'https://food-analyzer-pwtj4ty7sq-uc.a.run.app/analyze-food';
+
+  @override
+  void initState() {
+    super.initState();
+    
+    // Initialize animation controllers
+    _buttonsAnimationController = AnimationController(
+      duration: Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _imageAnimationController = AnimationController(
+      duration: Duration(milliseconds: 400),
+      vsync: this,
+    );
+    
+    _buttonsAnimation = Tween<double>(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(parent: _buttonsAnimationController, curve: Curves.easeInOut),
+    );
+    _imageAnimation = Tween<double>(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(parent: _imageAnimationController, curve: Curves.easeInOut),
+    );
+    
+    // Set up scroll listener
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    // Only handle scroll-based behavior if we have results
+    if (_results.isEmpty) return;
+    
+    final scrollPosition = _scrollController.position.pixels;
+    
+    // When user scrolls down into results (> 100px from top)
+    if (scrollPosition > 100) {
+      // Hide buttons and collapse image for more viewing space
+      if (_areButtonsVisible || !_isImageCollapsed) {
+        setState(() {
+          _areButtonsVisible = false;
+          _isImageCollapsed = true;
+        });
+        _buttonsAnimationController.forward();
+        _imageAnimationController.forward();
+      }
+    } 
+    // When user scrolls back to top (< 50px from top)
+    else if (scrollPosition < 50) {
+      // Show buttons and expand image
+      if (!_areButtonsVisible || _isImageCollapsed) {
+        setState(() {
+          _areButtonsVisible = true;
+          _isImageCollapsed = false;
+        });
+        _buttonsAnimationController.reverse();
+        _imageAnimationController.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _buttonsAnimationController.dispose();
+    _imageAnimationController.dispose();
+    super.dispose();
+  }
 
   Future<void> _pickImage(ImageSource source) async {
     try {
@@ -68,7 +145,24 @@ class _HomeScreenState extends State<HomeScreen> {
           _selectedImage = File(image.path);
           _results = [];
           _lastScanId = null;
+          // Keep UI in expanded state when new image is selected
+          _isImageCollapsed = false;
+          _areButtonsVisible = true;
+          _hasAnalyzedOnce = false; // Reset analysis flag
         });
+        
+        // Reset animations to initial state
+        _imageAnimationController.reset();
+        _buttonsAnimationController.reset();
+        
+        // Scroll to top to ensure user sees the new image
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            0,
+            duration: Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
       }
     } catch (e) {
       _showError('Failed to pick image: $e');
@@ -130,7 +224,17 @@ class _HomeScreenState extends State<HomeScreen> {
           if (results.isNotEmpty) {
             setState(() {
               _results = results;
+              // KEEP image expanded and buttons visible after analysis
+              _areButtonsVisible = true;
+              _isImageCollapsed = false;
+              _hasAnalyzedOnce = true; // Mark that analysis has been done
             });
+            
+            // Reset animations to ensure proper initial state
+            _buttonsAnimationController.reset();
+            _imageAnimationController.reset();
+            
+            // Don't auto-scroll or auto-collapse - let user control everything
           } else {
             _showError('No food items detected. Please try with a clearer image.');
           }
@@ -156,6 +260,27 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _toggleImageCollapse() {
+    setState(() {
+      _isImageCollapsed = !_isImageCollapsed;
+    });
+    
+    if (_isImageCollapsed) {
+      _imageAnimationController.forward();
+    } else {
+      _imageAnimationController.reverse();
+    }
+    
+    // If user manually expands image, scroll to top to show buttons
+    if (!_isImageCollapsed && !_areButtonsVisible) {
+      _scrollController.animateTo(
+        0,
+        duration: Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
   Future<void> _saveScanResult() async {
     if (_results.isEmpty || _selectedImage == null) {
       _showError('No results to save');
@@ -171,7 +296,6 @@ class _HomeScreenState extends State<HomeScreen> {
       print('📊 Results count: ${_results.length}');
       print('🖼️ Image path: ${_selectedImage!.path}');
       
-      // Add a timeout wrapper
       String scanId = await FirebaseService.saveScanResult(
         results: _results,
         imagePath: _selectedImage!.path,
@@ -181,7 +305,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'analysisTimestamp': DateTime.now().toIso8601String(),
         },
       ).timeout(
-        Duration(seconds: 30), // 30 second timeout
+        Duration(seconds: 30),
         onTimeout: () {
           throw Exception('Save operation timed out after 30 seconds. Please check your internet connection.');
         },
@@ -215,7 +339,6 @@ class _HomeScreenState extends State<HomeScreen> {
       
       _showError(errorMessage);
     } finally {
-      // ALWAYS reset the loading state
       setState(() {
         _isSaving = false;
       });
@@ -257,7 +380,23 @@ class _HomeScreenState extends State<HomeScreen> {
       _selectedImage = null;
       _results = [];
       _lastScanId = null;
+      _isImageCollapsed = false;
+      _areButtonsVisible = true;
+      _hasAnalyzedOnce = false; // Reset analysis flag
     });
+    
+    // Reset animations to initial state
+    _imageAnimationController.reset();
+    _buttonsAnimationController.reset();
+    
+    // Scroll back to top
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0,
+        duration: Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   @override
@@ -288,255 +427,187 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
-          // Image section
-          Container(
-            height: 280,
-            width: double.infinity,
-            margin: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey[300]!),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 3,
-                  offset: Offset(0, 1),
-                ),
-              ],
-            ),
-            child: _selectedImage != null
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.file(
-                      _selectedImage!,
-                      fit: BoxFit.cover,
-                    ),
-                  )
-                : Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.camera_alt_outlined,
-                        size: 72,
-                        color: Colors.grey[400],
-                      ),
-                      SizedBox(height: 16),
-                      Text(
-                        'Select a food image to analyze',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey[600],
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        'Take a photo or choose from gallery',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[500],
-                        ),
-                      ),
-                    ],
-                  ),
-          ),
-
-          // Action buttons
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _pickImage(ImageSource.camera),
-                    icon: Icon(Icons.camera_alt),
-                    label: Text('Camera'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[600],
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _pickImage(ImageSource.gallery),
-                    icon: Icon(Icons.photo_library),
-                    label: Text('Gallery'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue[600],
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          SizedBox(height: 16),
-
-          // Analyze button
-          if (_selectedImage != null)
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: SizedBox(
+          // Image section with smooth animation (always visible, collapsible only by scroll)
+          AnimatedBuilder(
+            animation: _imageAnimation,
+            builder: (context, child) {
+              final height = _isImageCollapsed 
+                ? 80.0 + (200.0 * _imageAnimation.value)
+                : 280.0;
+              
+              return Container(
+                height: height,
                 width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _isAnalyzing ? null : _analyzeFood,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange[600],
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: _isAnalyzing
-                      ? Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation(Colors.white),
-                              ),
-                            ),
-                            SizedBox(width: 12),
-                            Text('Analyzing with AI...'),
-                          ],
-                        )
-                      : Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.auto_awesome),
-                            SizedBox(width: 8),
-                            Text('Analyze Food', style: TextStyle(fontSize: 16)),
-                          ],
-                        ),
-                ),
-              ),
-            ),
-
-          // Save button (appears after analysis)
-          if (_results.isNotEmpty && _lastScanId == null)
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _isSaving ? null : _saveScanResult,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.purple[600],
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: _isSaving
-                      ? Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation(Colors.white),
-                              ),
-                            ),
-                            SizedBox(width: 8),
-                            Text('Saving...'),
-                          ],
-                        )
-                      : Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.save),
-                            SizedBox(width: 8),
-                            Text('Save Scan'),
-                          ],
-                        ),
-                ),
-              ),
-            ),
-
-          // Saved indicator
-          if (_lastScanId != null)
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Container(
-                width: double.infinity,
-                padding: EdgeInsets.symmetric(vertical: 12),
+                margin: EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.green[50],
-                  border: Border.all(color: Colors.green[300]!),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.check_circle, color: Colors.green[700]),
-                    SizedBox(width: 8),
-                    Text(
-                      'Scan Saved Successfully',
-                      style: TextStyle(
-                        color: Colors.green[700],
-                        fontWeight: FontWeight.w600,
-                      ),
+                  border: Border.all(color: Colors.grey[300]!),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withOpacity(0.1),
+                      spreadRadius: 1,
+                      blurRadius: 3,
+                      offset: Offset(0, 1),
                     ),
                   ],
                 ),
-              ),
-            ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Stack(
+                    children: [
+                      if (_selectedImage != null)
+                        Positioned.fill(
+                          child: Image.file(
+                            _selectedImage!,
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                      else
+                        _buildEmptyImagePlaceholder(),
+                      
+                      // Collapse/expand toggle (only show when there are results)
+                      if (_results.isNotEmpty)
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: IconButton(
+                              onPressed: _toggleImageCollapse,
+                              icon: Icon(
+                                _isImageCollapsed ? Icons.expand_more : Icons.expand_less,
+                                color: Colors.white,
+                              ),
+                              iconSize: 20,
+                            ),
+                          ),
+                        ),
+                      
+                      // Image info overlay when collapsed
+                      if (_isImageCollapsed && _selectedImage != null)
+                        Positioned(
+                          bottom: 8,
+                          left: 8,
+                          right: 48,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'Analyzed Image • Scroll up to expand',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
 
-          // Results section (rest of your existing code)
+          // Action buttons section - show based on state
+          if (_results.isEmpty)
+            // Always show buttons when no results (initial state)
+            _buildActionButtons()
+          else if (_hasAnalyzedOnce && _areButtonsVisible)
+            // Show buttons after analysis when not scrolled down
+            _buildActionButtons()
+          else if (_hasAnalyzedOnce && !_areButtonsVisible)
+            // Hide buttons when scrolled down (after analysis)
+            SizedBox.shrink()
+          else
+            // Fallback - should not reach here
+            _buildActionButtons(),
+
+          // Results section - takes remaining space when available
           if (_results.isNotEmpty)
             Expanded(
               child: Column(
                 children: [
-                  Padding(
-                    padding: EdgeInsets.all(16),
+                  // Results header with helpful hints
+                  Container(
+                    padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    decoration: BoxDecoration(
+                      color: Colors.green[50],
+                      border: Border(
+                        bottom: BorderSide(color: Colors.green[200]!, width: 1),
+                      ),
+                    ),
                     child: Row(
                       children: [
                         Icon(Icons.restaurant_menu, color: Colors.green[700]),
                         SizedBox(width: 8),
-                        Text(
-                          'AI Analysis Results',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green[700],
+                        Expanded(
+                          child: Text(
+                            'AI Analysis Results',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green[700],
+                            ),
                           ),
                         ),
+                      if (_areButtonsVisible)
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.green[100],
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              'Scroll down to focus on results',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.green[700],
+                              ),
+                            ),
+                          )
+                        else
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.blue[100],
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              'Scroll up to show more options',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.blue[700],
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
+                  
+                  // Scrollable results with improved layout
                   Expanded(
                     child: ListView.builder(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      controller: _scrollController,
+                      padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
                       itemCount: _results.length,
                       itemBuilder: (context, index) {
                         final result = _results[index];
                         return Card(
-                          margin: EdgeInsets.only(bottom: 12),
-                          elevation: 2,
+                          margin: EdgeInsets.only(bottom: 16),
+                          elevation: 3,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(16),
                           ),
                           child: Padding(
-                            padding: EdgeInsets.all(16),
+                            padding: EdgeInsets.all(20),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -548,7 +619,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       child: Text(
                                         result.name,
                                         style: TextStyle(
-                                          fontSize: 18,
+                                          fontSize: 20,
                                           fontWeight: FontWeight.bold,
                                           color: Colors.grey[800],
                                         ),
@@ -556,20 +627,20 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                     Container(
                                       padding: EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 4),
+                                          horizontal: 12, vertical: 6),
                                       decoration: BoxDecoration(
                                         color: result.confidence > 0.7
                                             ? Colors.green
                                             : result.confidence > 0.5
                                                 ? Colors.orange
                                                 : Colors.red,
-                                        borderRadius: BorderRadius.circular(12),
+                                        borderRadius: BorderRadius.circular(16),
                                       ),
                                       child: Text(
                                         '${(result.confidence * 100).toInt()}%',
                                         style: TextStyle(
                                           color: Colors.white,
-                                          fontSize: 12,
+                                          fontSize: 13,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),
@@ -577,67 +648,118 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ],
                                 ),
                                 
-                                SizedBox(height: 12),
+                                SizedBox(height: 16),
                                 
-                                // Weight slider
+                                // Calories prominently displayed
+                                Container(
+                                  padding: EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green[50],
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: Colors.green[200]!),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Calories',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.grey[600],
+                                            ),
+                                          ),
+                                          Text(
+                                            '${result.calculatedTotalCalories.toInt()}',
+                                            style: TextStyle(
+                                              fontSize: 28,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.green[700],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.end,
+                                        children: [
+                                          Text(
+                                            'Weight',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.grey[600],
+                                            ),
+                                          ),
+                                          Text(
+                                            '${result.weight.toInt()}g',
+                                            style: TextStyle(
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                
+                                SizedBox(height: 16),
+                                
+                                // Weight slider with better styling
                                 Text(
                                   'Adjust portion size:',
                                   style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.grey[600],
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey[700],
                                   ),
                                 ),
-                                Slider(
-                                  value: result.weight,
-                                  min: 10,
-                                  max: 500,
-                                  divisions: 49,
-                                  label: '${result.weight.round()}g',
-                                  onChanged: (value) => _updateWeight(index, value),
-                                  activeColor: Colors.green[600],
+                                SizedBox(height: 8),
+                                SliderTheme(
+                                  data: SliderTheme.of(context).copyWith(
+                                    trackHeight: 6,
+                                    thumbShape: RoundSliderThumbShape(enabledThumbRadius: 12),
+                                    overlayShape: RoundSliderOverlayShape(overlayRadius: 20),
+                                  ),
+                                  child: Slider(
+                                    value: result.weight,
+                                    min: 10,
+                                    max: 500,
+                                    divisions: 49,
+                                    label: '${result.weight.round()}g',
+                                    onChanged: (value) => _updateWeight(index, value),
+                                    activeColor: Colors.green[600],
+                                    inactiveColor: Colors.green[100],
+                                  ),
                                 ),
                                 
-                                // Calories info
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      'Calories: ${result.calculatedTotalCalories.toInt()}',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green[700],
-                                      ),
-                                    ),
-                                    Text(
-                                      '${result.weight.toInt()}g',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey[600],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                
-                                // Nutrition info
+                                // Nutrition info with better layout
                                 if (result.nutrients != null) ...[
-                                  SizedBox(height: 12),
+                                  SizedBox(height: 16),
                                   Text(
-                                    'Nutrition:',
+                                    'Nutrition breakdown:',
                                     style: TextStyle(
-                                      fontSize: 14,
+                                      fontSize: 16,
                                       fontWeight: FontWeight.w600,
                                       color: Colors.grey[700],
                                     ),
                                   ),
-                                  SizedBox(height: 8),
-                                  Wrap(
-                                    spacing: 8,
+                                  SizedBox(height: 12),
+                                  Row(
                                     children: [
-                                      _buildNutrientChip('Protein', '${result.nutrients!.adjustedProtein(result.weight).toInt()}g', Colors.red[100]!),
-                                      _buildNutrientChip('Carbs', '${result.nutrients!.adjustedCarbs(result.weight).toInt()}g', Colors.blue[100]!),
-                                      _buildNutrientChip('Fat', '${result.nutrients!.adjustedFat(result.weight).toInt()}g', Colors.orange[100]!),
-                                      _buildNutrientChip('Fiber', '${result.nutrients!.adjustedFiber(result.weight).toInt()}g', Colors.green[100]!),
+                                      Expanded(child: _buildNutrientCard('Protein', '${result.nutrients!.adjustedProtein(result.weight).toInt()}g', Colors.red[100]!, Colors.red[700]!)),
+                                      SizedBox(width: 8),
+                                      Expanded(child: _buildNutrientCard('Carbs', '${result.nutrients!.adjustedCarbs(result.weight).toInt()}g', Colors.blue[100]!, Colors.blue[700]!)),
+                                    ],
+                                  ),
+                                  SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Expanded(child: _buildNutrientCard('Fat', '${result.nutrients!.adjustedFat(result.weight).toInt()}g', Colors.orange[100]!, Colors.orange[700]!)),
+                                      SizedBox(width: 8),
+                                      Expanded(child: _buildNutrientCard('Fiber', '${result.nutrients!.adjustedFiber(result.weight).toInt()}g', Colors.green[100]!, Colors.green[700]!)),
                                     ],
                                   ),
                                 ],
@@ -649,30 +771,68 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   
-                  // Total calories summary
+                  // Enhanced total calories summary
                   Container(
-                    padding: EdgeInsets.all(16),
+                    padding: EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: Colors.green[50],
-                      border: Border(top: BorderSide(color: Colors.grey[300]!)),
+                      gradient: LinearGradient(
+                        colors: [Colors.green[100]!, Colors.green[50]!],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      border: Border(top: BorderSide(color: Colors.green[300]!, width: 2)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.green.withOpacity(0.1),
+                          spreadRadius: 1,
+                          blurRadius: 8,
+                          offset: Offset(0, -2),
+                        ),
+                      ],
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'Total Calories:',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey[800],
-                          ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Total Calories',
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                            Text(
+                              'from ${_results.length} item${_results.length != 1 ? 's' : ''}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[500],
+                              ),
+                            ),
+                          ],
                         ),
-                        Text(
-                          '${_totalCalories.toInt()}',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green[700],
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.green[600],
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.green.withOpacity(0.3),
+                                spreadRadius: 1,
+                                blurRadius: 4,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            '${_totalCalories.toInt()}',
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ],
@@ -686,20 +846,236 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildNutrientChip(String label, String value, Color color) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        '$label: $value',
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-          color: Colors.grey[800],
+  Widget _buildActionButtons() {
+    return Column(
+      children: [
+        // Camera and Gallery buttons
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _pickImage(ImageSource.camera),
+                  icon: Icon(Icons.camera_alt),
+                  label: Text('Camera'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green[600],
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _pickImage(ImageSource.gallery),
+                  icon: Icon(Icons.photo_library),
+                  label: Text('Gallery'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[600],
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
+
+        SizedBox(height: 16),
+
+        // Analyze button
+        if (_selectedImage != null && _results.isEmpty)
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _isAnalyzing ? null : _analyzeFood,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange[600],
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: _isAnalyzing
+                    ? Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation(Colors.white),
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                          Text('Analyzing with AI...'),
+                        ],
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.auto_awesome),
+                          SizedBox(width: 8),
+                          Text('Analyze Food', style: TextStyle(fontSize: 16)),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+
+        // Save button - only show when we have results
+        if (_results.isNotEmpty && _lastScanId == null)
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _isSaving ? null : _saveScanResult,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.purple[600],
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: _isSaving
+                    ? Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation(Colors.white),
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Text('Saving...'),
+                        ],
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.save),
+                          SizedBox(width: 8),
+                          Text('Save Scan'),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+
+        // Saved indicator
+        if (_lastScanId != null)
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Container(
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                border: Border.all(color: Colors.green[300]!),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green[700]),
+                  SizedBox(width: 8),
+                  Text(
+                    'Scan Saved Successfully',
+                    style: TextStyle(
+                      color: Colors.green[700],
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildEmptyImagePlaceholder() {
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.camera_alt_outlined,
+            size: 72,
+            color: Colors.grey[400],
+          ),
+          SizedBox(height: 16),
+          Text(
+            'Select a food image to analyze',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Take a photo or choose from gallery',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey[500],
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNutrientCard(String label, String value, Color bgColor, Color textColor) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: textColor.withOpacity(0.3)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: textColor.withOpacity(0.8),
+            ),
+          ),
+          SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: textColor,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -719,7 +1095,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// Scan History Screen
+// Scan History Screen (keeping existing implementation)
 class ScanHistoryScreen extends StatefulWidget {
   @override
   _ScanHistoryScreenState createState() => _ScanHistoryScreenState();
@@ -1066,7 +1442,7 @@ class _ScanHistoryScreenState extends State<ScanHistoryScreen> {
   }
 }
 
-// Daily Summary Screen
+// Daily Summary Screen (keeping existing implementation)
 class DailySummaryScreen extends StatefulWidget {
   @override
   _DailySummaryScreenState createState() => _DailySummaryScreenState();
