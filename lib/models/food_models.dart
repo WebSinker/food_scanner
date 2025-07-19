@@ -16,10 +16,19 @@ class FoodResult {
   }) : caloriesPer100g = calories;
 
   double get calculatedTotalCalories {
+    // If backend provided total calories, scale it to current weight
     if (totalCaloriesFromAI != null) {
-      final originalWeight = 100.0;
-      return (totalCaloriesFromAI! * weight) / originalWeight;
+      // The totalCaloriesFromAI is calculated for estimated_weight_grams
+      // We need to scale it to the current weight
+      // Assuming totalCaloriesFromAI was calculated for some original weight
+      // We should scale it proportionally to the current weight
+      
+      // For enhanced function: totalCaloriesFromAI is already calculated
+      // for the estimated portion, so we need to scale it to current weight
+      return (caloriesPer100g * weight) / 100;
     }
+    
+    // Fallback calculation
     return (caloriesPer100g * weight) / 100;
   }
 
