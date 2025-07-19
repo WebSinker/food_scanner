@@ -20,7 +20,6 @@ class FirebaseService {
       
       if (user == null) {
         print('🔐 No current user, creating anonymous user...');
-        // Create anonymous user with timeout
         UserCredential userCredential = await _auth.signInAnonymously()
             .timeout(Duration(seconds: 15));
         user = userCredential.user;
@@ -35,7 +34,6 @@ class FirebaseService {
     } catch (e) {
       print('❌ Auth error: $e');
       
-      // More specific auth error handling
       if (e.toString().contains('network')) {
         throw Exception('Network error during authentication. Please check your connection.');
       } else if (e.toString().contains('operation-not-allowed')) {
@@ -73,6 +71,7 @@ class FirebaseService {
         'timestamp': FieldValue.serverTimestamp(),
         'userId': user?.uid,
         'platform': Platform.operatingSystem,
+        'enhanced_analysis': true,
       }).timeout(Duration(seconds: 15));
       
       print('✅ Firebase connection test successful');
@@ -97,15 +96,27 @@ class FirebaseService {
     }
   }
   
-  // Save scan result with enhanced error handling
+  // Enhanced save scan result with USDA data logging
   static Future<String> saveScanResult({
     required List<FoodResult> results,
     required String imagePath,
     Map<String, dynamic>? metadata,
   }) async {
     try {
-      print('💾 Starting save scan process...');
+      print('💾 Starting enhanced save scan process...');
       print('📊 Results count: ${results.length}');
+      
+      // Log USDA data being saved
+      print('🗃️ USDA DATA BEING SAVED:');
+      for (int i = 0; i < results.length; i++) {
+        final result = results[i];
+        print('   ${i + 1}. ${result.name}');
+        print('      🗃️ Database: ${result.databaseType}');
+        print('      🔢 FDC ID: ${result.fdcId ?? 'N/A'}');
+        print('      🏷️ NDB Number: ${result.ndbNumber ?? 'N/A'}');
+        print('      📊 Confidence: ${(result.confidence * 100).toInt()}%');
+        print('      🔍 USDA Results: ${result.usdaSearchResults ?? 0}');
+      }
       
       // Step 1: Detailed connection test
       print('🔥 Step 1: Testing Firebase connection...');
@@ -119,10 +130,23 @@ class FirebaseService {
       String userId = await getCurrentUserId();
       print('👤 User ID: $userId');
       
-      // Step 3: Prepare data
-      print('📝 Step 3: Preparing data...');
+      // Step 3: Prepare enhanced data
+      print('📝 Step 3: Preparing enhanced data...');
       double totalCalories = results.fold(0.0, (sum, result) => sum + result.calculatedTotalCalories);
       print('🔥 Total calories: $totalCalories');
+      
+      // Count database sources
+      Map<String, int> databaseCounts = {};
+      int totalUsdaResults = 0;
+      List<String> allDatabasesSearched = [];
+      
+      for (final result in results) {
+        databaseCounts[result.databaseType] = (databaseCounts[result.databaseType] ?? 0) + 1;
+        totalUsdaResults += result.usdaSearchResults ?? 0;
+        if (result.databasesSearched != null) {
+          allDatabasesSearched.addAll(result.databasesSearched!);
+        }
+      }
       
       Map<String, dynamic> scanData = {
         'userId': userId,
@@ -135,6 +159,17 @@ class FirebaseService {
             'weight': result.weight,
             'confidence': result.confidence,
             'totalCalories': result.calculatedTotalCalories,
+            // Enhanced USDA data
+            'fdcId': result.fdcId,
+            'ndbNumber': result.ndbNumber,
+            'dataSource': result.dataSource,
+            'databaseMatch': result.databaseMatch,
+            'databaseType': result.databaseType,
+            'foodCategory': result.foodCategory,
+            'preparationMethod': result.preparationMethod,
+            'usdaSearchResults': result.usdaSearchResults,
+            'databasesSearched': result.databasesSearched,
+            'confidenceLevel': result.confidenceLevel,
           };
           
           if (result.nutrients != null) {
@@ -152,9 +187,25 @@ class FirebaseService {
         'metadata': metadata ?? {},
         'createdAt': DateTime.now().toIso8601String(),
         'platform': Platform.operatingSystem,
+        // Enhanced metadata
+        'enhancedAnalysis': true,
+        'analysisVersion': '2.0.0',
+        'databaseCounts': databaseCounts,
+        'totalUsdaResults': totalUsdaResults,
+        'uniqueDatabasesSearched': allDatabasesSearched.toSet().toList(),
+        'usdaDataQuality': {
+          'foundationCount': databaseCounts['Foundation'] ?? 0,
+          'srLegacyCount': databaseCounts['SR Legacy'] ?? 0,
+          'surveyCount': databaseCounts['Survey (FNDDS)'] ?? 0,
+          'brandedCount': databaseCounts['Branded'] ?? 0,
+          'estimatedCount': databaseCounts['Estimated'] ?? 0,
+          'averageConfidence': results.isNotEmpty 
+              ? results.map((r) => r.confidence).reduce((a, b) => a + b) / results.length
+              : 0.0,
+        }
       };
       
-      print('📄 Step 4: Saving to Firestore collection: $SCANS_COLLECTION');
+      print('📄 Step 4: Saving enhanced data to Firestore collection: $SCANS_COLLECTION');
       
       // Step 4: Save to Firestore with retry logic
       DocumentReference? docRef;
@@ -171,7 +222,7 @@ class FirebaseService {
               .add(scanData)
               .timeout(Duration(seconds: 20));
           
-          print('✅ Save successful on attempt $attempts');
+          print('✅ Enhanced save successful on attempt $attempts');
           break; // Success, exit retry loop
           
         } catch (e) {
@@ -191,11 +242,16 @@ class FirebaseService {
         throw Exception('Failed to save after $maxAttempts attempts');
       }
       
-      print('✅ Scan saved successfully with ID: ${docRef.id}');
+      print('✅ Enhanced scan saved successfully with ID: ${docRef.id}');
+      print('📊 Saved data includes:');
+      print('   🗃️ Database distribution: $databaseCounts');
+      print('   🔍 Total USDA results: $totalUsdaResults');
+      print('   📚 Databases searched: ${allDatabasesSearched.toSet().toList()}');
+      
       return docRef.id;
       
     } catch (e) {
-      print('❌ Save error details: $e');
+      print('❌ Enhanced save error details: $e');
       print('❌ Error type: ${e.runtimeType}');
       
       // Enhanced error messages
@@ -212,25 +268,25 @@ class FirebaseService {
       } else if (e.toString().contains('network') || e.toString().contains('connection')) {
         throw Exception('Network connection error. Please check your internet connection.');
       } else {
-        throw Exception('Failed to save scan: ${e.toString()}');
+        throw Exception('Failed to save enhanced scan: ${e.toString()}');
       }
     }
   }
   
-  // Rest of your methods remain the same...
+  // Enhanced get user scan history with USDA data
   static Future<List<Map<String, dynamic>>> getUserScanHistory({
     int limit = 20,
     DateTime? startAfter,
   }) async {
     try {
-      print('📚 Loading scan history...');
+      print('📚 Loading enhanced scan history...');
       String userId = await getCurrentUserId();
       
       Query query = _firestore
           .collection(SCANS_COLLECTION)
           .where('userId', isEqualTo: userId)
           .orderBy('timestamp', descending: true)
-          .orderBy(FieldPath.documentId); // This uses __name__
+          .orderBy(FieldPath.documentId);
       
       if (startAfter != null) {
         query = query.startAfter([Timestamp.fromDate(startAfter)]);
@@ -242,10 +298,28 @@ class FirebaseService {
       List<Map<String, dynamic>> history = snapshot.docs.map((doc) {
         Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
         data['id'] = doc.id;
+        
+        // Log enhanced data for debugging
+        if (data['enhancedAnalysis'] == true) {
+          print('📊 Enhanced scan loaded: ${doc.id}');
+          if (data['databaseCounts'] != null) {
+            print('   🗃️ Database counts: ${data['databaseCounts']}');
+          }
+          if (data['totalUsdaResults'] != null) {
+            print('   🔍 Total USDA results: ${data['totalUsdaResults']}');
+          }
+        }
+        
         return data;
       }).toList();
       
       print('✅ Loaded ${history.length} scan records');
+      
+      // Count enhanced vs legacy scans
+      int enhancedScans = history.where((scan) => scan['enhancedAnalysis'] == true).length;
+      int legacyScans = history.length - enhancedScans;
+      print('📈 Enhanced scans: $enhancedScans, Legacy scans: $legacyScans');
+      
       return history;
       
     } catch (e) {
@@ -254,9 +328,11 @@ class FirebaseService {
     }
   }
   
-  // Other methods remain the same...
+  // Enhanced get scan by ID
   static Future<Map<String, dynamic>?> getScanById(String scanId) async {
     try {
+      print('🔍 Loading scan: $scanId');
+      
       DocumentSnapshot doc = await _firestore
           .collection(SCANS_COLLECTION)
           .doc(scanId)
@@ -266,6 +342,27 @@ class FirebaseService {
       if (doc.exists) {
         Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
         data['id'] = doc.id;
+        
+        // Log enhanced data details
+        if (data['enhancedAnalysis'] == true) {
+          print('📊 Enhanced scan details:');
+          print('   🗃️ Database counts: ${data['databaseCounts']}');
+          print('   🔍 Total USDA results: ${data['totalUsdaResults']}');
+          print('   📚 Databases searched: ${data['uniqueDatabasesSearched']}');
+          
+          if (data['foodItems'] != null) {
+            List<dynamic> foodItems = data['foodItems'];
+            print('   🍽️ Food items with USDA data:');
+            for (int i = 0; i < foodItems.length; i++) {
+              var item = foodItems[i];
+              print('      ${i + 1}. ${item['name']}');
+              print('         🔢 FDC ID: ${item['fdcId'] ?? 'N/A'}');
+              print('         🏷️ NDB: ${item['ndbNumber'] ?? 'N/A'}');
+              print('         🗃️ DB: ${item['databaseType'] ?? 'Unknown'}');
+            }
+          }
+        }
+        
         return data;
       }
       
@@ -277,6 +374,7 @@ class FirebaseService {
     }
   }
   
+  // Delete scan (unchanged)
   static Future<void> deleteScan(String scanId) async {
     try {
       await _firestore
@@ -293,22 +391,22 @@ class FirebaseService {
     }
   }
   
+  // Enhanced daily calories summary
   static Future<Map<String, dynamic>> getDailyCaloriesSummary(DateTime date) async {
     try {
-      print('📊 Loading daily summary for: $date');
+      print('📊 Loading enhanced daily summary for: $date');
       String userId = await getCurrentUserId();
       
       DateTime startOfDay = DateTime(date.year, date.month, date.day);
       DateTime endOfDay = DateTime(date.year, date.month, date.day, 23, 59, 59);
       
-      // Use the same pattern as getUserScanHistory with proper ordering
       QuerySnapshot snapshot = await _firestore
           .collection(SCANS_COLLECTION)
           .where('userId', isEqualTo: userId)
           .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
           .where('timestamp', isLessThanOrEqualTo: Timestamp.fromDate(endOfDay))
           .orderBy('timestamp', descending: true)
-          .orderBy(FieldPath.documentId) // This uses __name__ field for consistent ordering
+          .orderBy(FieldPath.documentId)
           .get()
           .timeout(Duration(seconds: 15));
       
@@ -319,10 +417,36 @@ class FirebaseService {
       double totalFat = 0;
       double totalFiber = 0;
       
+      // Enhanced tracking
+      Map<String, int> databaseCounts = {};
+      int enhancedScans = 0;
+      int totalUsdaResults = 0;
+      Set<String> allDatabasesUsed = {};
+      
       for (var doc in snapshot.docs) {
         Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
         totalCalories += (data['totalCalories'] ?? 0).toDouble();
         scanCount++;
+        
+        // Track enhanced analysis data
+        if (data['enhancedAnalysis'] == true) {
+          enhancedScans++;
+          
+          if (data['databaseCounts'] != null) {
+            Map<String, dynamic> counts = Map<String, dynamic>.from(data['databaseCounts']);
+            counts.forEach((db, count) {
+              databaseCounts[db] = (databaseCounts[db] ?? 0) + (count as int);
+            });
+          }
+          
+          if (data['totalUsdaResults'] != null) {
+            totalUsdaResults += (data['totalUsdaResults'] as int);
+          }
+          
+          if (data['uniqueDatabasesSearched'] != null) {
+            allDatabasesUsed.addAll(List<String>.from(data['uniqueDatabasesSearched']));
+          }
+        }
         
         // Sum nutrients
         List<dynamic> foodItems = data['foodItems'] ?? [];
@@ -338,7 +462,12 @@ class FirebaseService {
         }
       }
       
-      print('✅ Daily summary loaded: ${scanCount} scans, ${totalCalories.toInt()} calories');
+      print('✅ Enhanced daily summary loaded:');
+      print('   📊 ${scanCount} scans, ${totalCalories.toInt()} calories');
+      print('   🔬 Enhanced scans: $enhancedScans');
+      print('   🗃️ Database distribution: $databaseCounts');
+      print('   🔍 Total USDA results: $totalUsdaResults');
+      print('   📚 Databases used: ${allDatabasesUsed.toList()}');
       
       return {
         'date': date,
@@ -350,11 +479,88 @@ class FirebaseService {
           'fat': totalFat,
           'fiber': totalFiber,
         },
+        // Enhanced summary data
+        'enhancedScans': enhancedScans,
+        'legacyScans': scanCount - enhancedScans,
+        'databaseCounts': databaseCounts,
+        'totalUsdaResults': totalUsdaResults,
+        'databasesUsed': allDatabasesUsed.toList(),
+        'dataQuality': {
+          'enhancedPercentage': scanCount > 0 ? (enhancedScans / scanCount * 100) : 0,
+          'avgUsdaResultsPerScan': enhancedScans > 0 ? (totalUsdaResults / enhancedScans) : 0,
+        }
       };
       
     } catch (e) {
-      print('❌ Error getting daily summary: $e');
+      print('❌ Error getting enhanced daily summary: $e');
       throw Exception('Failed to get daily summary: $e');
+    }
+  }
+  
+  // New method: Get USDA statistics
+  static Future<Map<String, dynamic>> getUsdaStatistics() async {
+    try {
+      print('📈 Loading USDA statistics...');
+      String userId = await getCurrentUserId();
+      
+      QuerySnapshot snapshot = await _firestore
+          .collection(SCANS_COLLECTION)
+          .where('userId', isEqualTo: userId)
+          .where('enhancedAnalysis', isEqualTo: true)
+          .orderBy('timestamp', descending: true)
+          .limit(100) // Last 100 enhanced scans
+          .get()
+          .timeout(Duration(seconds: 15));
+      
+      Map<String, int> totalDatabaseCounts = {};
+      int totalUsdaResults = 0;
+      Set<String> allDatabasesUsed = {};
+      List<double> confidenceScores = [];
+      
+      for (var doc in snapshot.docs) {
+        Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+        
+        if (data['databaseCounts'] != null) {
+          Map<String, dynamic> counts = Map<String, dynamic>.from(data['databaseCounts']);
+          counts.forEach((db, count) {
+            totalDatabaseCounts[db] = (totalDatabaseCounts[db] ?? 0) + (count as int);
+          });
+        }
+        
+        if (data['totalUsdaResults'] != null) {
+          totalUsdaResults += (data['totalUsdaResults'] as int);
+        }
+        
+        if (data['uniqueDatabasesSearched'] != null) {
+          allDatabasesUsed.addAll(List<String>.from(data['uniqueDatabasesSearched']));
+        }
+        
+        if (data['usdaDataQuality'] != null && data['usdaDataQuality']['averageConfidence'] != null) {
+          confidenceScores.add((data['usdaDataQuality']['averageConfidence'] as num).toDouble());
+        }
+      }
+      
+      print('✅ USDA statistics loaded:');
+      print('   📊 Total database usage: $totalDatabaseCounts');
+      print('   🔍 Total USDA results: $totalUsdaResults');
+      print('   📚 Databases used: ${allDatabasesUsed.toList()}');
+      
+      return {
+        'totalEnhancedScans': snapshot.docs.length,
+        'databaseCounts': totalDatabaseCounts,
+        'totalUsdaResults': totalUsdaResults,
+        'databasesUsed': allDatabasesUsed.toList(),
+        'averageConfidence': confidenceScores.isNotEmpty 
+            ? confidenceScores.reduce((a, b) => a + b) / confidenceScores.length
+            : 0.0,
+        'mostUsedDatabase': totalDatabaseCounts.isNotEmpty 
+            ? totalDatabaseCounts.entries.reduce((a, b) => a.value > b.value ? a : b).key
+            : 'None',
+      };
+      
+    } catch (e) {
+      print('❌ Error getting USDA statistics: $e');
+      throw Exception('Failed to get USDA statistics: $e');
     }
   }
 }

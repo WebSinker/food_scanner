@@ -23,7 +23,7 @@ class FoodApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AI Food Calorie Scanner',
+      title: 'Enhanced USDA Food Scanner',
       theme: ThemeData(
         primarySwatch: Colors.green,
         useMaterial3: true,
@@ -61,8 +61,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   
   bool _isImageCollapsed = false;
   bool _areButtonsVisible = true;
-  bool _hasAnalyzedOnce = false; // New flag to track if analysis has been done
+  bool _hasAnalyzedOnce = false;
+  bool _isTotalSummaryCollapsed = true; // Start collapsed
+  bool _allowSummaryExpansion = false; // Only allow expansion when scrolled
   
+  // Updated URL for enhanced backend
   static const String FIREBASE_FUNCTION_URL = 
       'https://food-analyzer-pwtj4ty7sq-uc.a.run.app/analyze-food';
 
@@ -96,6 +99,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (_results.isEmpty) return;
     
     final scrollPosition = _scrollController.position.pixels;
+    final maxScrollExtent = _scrollController.position.maxScrollExtent;
+    
+    // Enable summary expansion when user has scrolled into results (> 50px)
+    if (scrollPosition > 50 && !_allowSummaryExpansion) {
+      setState(() {
+        _allowSummaryExpansion = true;
+      });
+    }
     
     // When user scrolls down into results (> 100px from top)
     if (scrollPosition > 100) {
@@ -119,6 +130,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         });
         _buttonsAnimationController.reverse();
         _imageAnimationController.reverse();
+      }
+      
+      // Reset summary expansion permission and collapse summary when at top
+      if (_allowSummaryExpansion) {
+        setState(() {
+          _allowSummaryExpansion = false;
+          _isTotalSummaryCollapsed = true;
+        });
+      }
+    }
+    
+    // Auto-collapse summary when scrolling near bottom to prevent cutoff
+    if (maxScrollExtent > 0 && scrollPosition > (maxScrollExtent - 100)) {
+      if (!_isTotalSummaryCollapsed) {
+        setState(() {
+          _isTotalSummaryCollapsed = true;
+        });
       }
     }
   }
@@ -148,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           // Keep UI in expanded state when new image is selected
           _isImageCollapsed = false;
           _areButtonsVisible = true;
-          _hasAnalyzedOnce = false; // Reset analysis flag
+          _hasAnalyzedOnce = false;
         });
         
         // Reset animations to initial state
@@ -182,9 +210,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final bytes = await _selectedImage!.readAsBytes();
       final base64Image = base64Encode(bytes);
       
-      print('Sending image to AI for analysis...');
+      print('🚀 Starting enhanced USDA food analysis...');
+      print('📏 Image size: ${bytes.length} bytes');
       
-      // Call Firebase Function with Gemini
+      // Call Enhanced Firebase Function
       final response = await http.post(
         Uri.parse(FIREBASE_FUNCTION_URL),
         headers: {
@@ -194,60 +223,76 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         body: jsonEncode({
           'image': base64Image,
         }),
-      ).timeout(Duration(seconds: 60));
+      ).timeout(Duration(seconds: 120)); // Increased timeout for comprehensive search
 
-      print('Response status: ${response.statusCode}');
+      print('📡 Response status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         
+        print('🔍 Response data keys: ${data.keys.toList()}');
+        
         if (data['success'] == true && data['foods'] != null) {
           List<FoodResult> results = [];
           
-          for (var food in data['foods']) {
+          print('📊 Processing ${data['foods'].length} food items...');
+          
+          for (int i = 0; i < data['foods'].length; i++) {
+            var food = data['foods'][i];
             try {
-              results.add(FoodResult(
-                name: food['name'] ?? 'Unknown Food',
-                calories: (food['calories_per_100g'] ?? 200).toDouble(),
-                confidence: (food['confidence'] ?? 0.5).toDouble(),
-                weight: (food['estimated_weight_grams'] ?? 100).toDouble(),
-                totalCaloriesFromAI: (food['total_calories'] ?? 200).toDouble(),
-                nutrients: food['nutrients'] != null 
-                    ? NutrientInfo.fromJson(food['nutrients']) 
-                    : null,
-              ));
+              print('\n🍽️ Processing item ${i + 1}: ${food['name']}');
+              
+              // Use enhanced factory method
+              final foodResult = FoodResult.fromEnhancedApi(food);
+              results.add(foodResult);
+              
+              // Log enhanced data
+              print('   🗃️ Database: ${foodResult.databaseType}');
+              print('   🔢 FDC ID: ${foodResult.fdcId ?? 'N/A'}');
+              print('   🏷️ NDB Number: ${foodResult.ndbNumber ?? 'N/A'}');
+              print('   📊 Confidence: ${(foodResult.confidence * 100).toInt()}%');
+              print('   🔍 USDA Results: ${foodResult.usdaSearchResults ?? 0}');
+              
             } catch (e) {
-              print('Error parsing food item: $e');
+              print('❌ Error parsing food item ${i + 1}: $e');
+              print('   📄 Raw data: $food');
             }
           }
           
           if (results.isNotEmpty) {
             setState(() {
               _results = results;
-              // KEEP image expanded and buttons visible after analysis
               _areButtonsVisible = true;
               _isImageCollapsed = false;
-              _hasAnalyzedOnce = true; // Mark that analysis has been done
+              _hasAnalyzedOnce = true;
             });
+            
+            // Log detailed analysis results
+            FoodAnalysisLogger.logDetailedResults(_results);
+            FoodAnalysisLogger.logNdbNumbers(_results);
             
             // Reset animations to ensure proper initial state
             _buttonsAnimationController.reset();
             _imageAnimationController.reset();
             
-            // Don't auto-scroll or auto-collapse - let user control everything
+            print('✅ Analysis complete: ${_results.length} items processed');
+            
           } else {
             _showError('No food items detected. Please try with a clearer image.');
           }
         } else {
           _showError('Analysis failed: ${data['error'] ?? 'Unknown error'}');
+          print('❌ API Error details: $data');
         }
       } else {
+        final errorBody = response.body;
+        print('❌ Server error ${response.statusCode}: $errorBody');
         _showError('Server error: ${response.statusCode}');
       }
     } catch (e) {
-      print('Analysis error: $e');
+      print('❌ Analysis error: $e');
       if (e.toString().contains('TimeoutException')) {
-        _showError('Analysis timed out. Please try again with a smaller image.');
+        _showError('Analysis timed out. The comprehensive USDA search takes longer but provides better results. Please try again.');
       } else if (e.toString().contains('SocketException')) {
         _showError('Network error. Please check your internet connection.');
       } else {
@@ -292,17 +337,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
 
     try {
-      print('🔧 Starting save process...');
+      print('💾 Starting save process with enhanced data...');
       print('📊 Results count: ${_results.length}');
-      print('🖼️ Image path: ${_selectedImage!.path}');
+      
+      // Log what we're saving
+      for (final result in _results) {
+        print('   📋 ${result.name}: ${result.dataSourceInfo}');
+      }
       
       String scanId = await FirebaseService.saveScanResult(
         results: _results,
         imagePath: _selectedImage!.path,
         metadata: {
-          'appVersion': '1.0.0',
+          'appVersion': '2.0.0',
           'deviceInfo': Platform.operatingSystem,
           'analysisTimestamp': DateTime.now().toIso8601String(),
+          'enhancedAnalysis': true,
+          'usdaDatabases': _results
+              .where((r) => r.databasesSearched != null)
+              .expand((r) => r.databasesSearched!)
+              .toSet()
+              .toList(),
+          'totalUsdaResults': _results
+              .map((r) => r.usdaSearchResults ?? 0)
+              .reduce((a, b) => a + b),
         },
       ).timeout(
         Duration(seconds: 30),
@@ -317,7 +375,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _lastScanId = scanId;
       });
 
-      _showSuccess('Scan saved successfully!');
+      _showSuccess('Enhanced scan saved successfully!');
       
     } catch (e) {
       print('❌ Save error details: $e');
@@ -382,7 +440,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _lastScanId = null;
       _isImageCollapsed = false;
       _areButtonsVisible = true;
-      _hasAnalyzedOnce = false; // Reset analysis flag
+      _hasAnalyzedOnce = false;
+      _isTotalSummaryCollapsed = true; // Reset to collapsed
+      _allowSummaryExpansion = false; // Reset expansion permission
     });
     
     // Reset animations to initial state
@@ -403,7 +463,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('AI Food Calorie Scanner'),
+        title: Text('Enhanced USDA Food Scanner'),
         backgroundColor: Theme.of(context).colorScheme.primary,
         foregroundColor: Colors.white,
         actions: [
@@ -427,7 +487,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ),
       body: Column(
         children: [
-          // Image section with smooth animation (always visible, collapsible only by scroll)
+          // Image section with smooth animation
           AnimatedBuilder(
             animation: _imageAnimation,
             builder: (context, child) {
@@ -516,49 +576,61 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             },
           ),
 
-          // Action buttons section - show based on state
+          // Action buttons section
           if (_results.isEmpty)
-            // Always show buttons when no results (initial state)
             _buildActionButtons()
           else if (_hasAnalyzedOnce && _areButtonsVisible)
-            // Show buttons after analysis when not scrolled down
             _buildActionButtons()
           else if (_hasAnalyzedOnce && !_areButtonsVisible)
-            // Hide buttons when scrolled down (after analysis)
             SizedBox.shrink()
           else
-            // Fallback - should not reach here
             _buildActionButtons(),
 
-          // Results section - takes remaining space when available
+          // Results section with enhanced display
           if (_results.isNotEmpty)
             Expanded(
               child: Column(
                 children: [
-                  // Results header with helpful hints
+                  // Enhanced results header
                   Container(
                     padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
                     decoration: BoxDecoration(
-                      color: Colors.green[50],
+                      gradient: LinearGradient(
+                        colors: [Colors.green[50]!, Colors.blue[50]!],
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                      ),
                       border: Border(
                         bottom: BorderSide(color: Colors.green[200]!, width: 1),
                       ),
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.restaurant_menu, color: Colors.green[700]),
+                        Icon(Icons.science, color: Colors.green[700]),
                         SizedBox(width: 8),
                         Expanded(
-                          child: Text(
-                            'AI Analysis Results',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.green[700],
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Enhanced USDA Analysis',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.green[700],
+                                ),
+                              ),
+                              Text(
+                                'Comprehensive nutrition database search',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.green[600],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      if (_areButtonsVisible)
+                        if (_areButtonsVisible)
                           Container(
                             padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
@@ -566,7 +638,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
-                              'Scroll down to focus on results',
+                              'Scroll for focus view',
                               style: TextStyle(
                                 fontSize: 10,
                                 color: Colors.green[700],
@@ -581,7 +653,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
-                              'Scroll up to show more options',
+                              'Scroll up for options',
                               style: TextStyle(
                                 fontSize: 10,
                                 color: Colors.blue[700],
@@ -592,7 +664,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                   ),
                   
-                  // Scrollable results with improved layout
+                  // Enhanced scrollable results
                   Expanded(
                     child: ListView.builder(
                       controller: _scrollController,
@@ -600,239 +672,493 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       itemCount: _results.length,
                       itemBuilder: (context, index) {
                         final result = _results[index];
-                        return Card(
-                          margin: EdgeInsets.only(bottom: 16),
-                          elevation: 3,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Padding(
-                            padding: EdgeInsets.all(20),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Food name and confidence
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        result.name,
-                                        style: TextStyle(
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.grey[800],
-                                        ),
-                                      ),
-                                    ),
-                                    Container(
-                                      padding: EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 6),
-                                      decoration: BoxDecoration(
-                                        color: result.confidence > 0.7
-                                            ? Colors.green
-                                            : result.confidence > 0.5
-                                                ? Colors.orange
-                                                : Colors.red,
-                                        borderRadius: BorderRadius.circular(16),
-                                      ),
-                                      child: Text(
-                                        '${(result.confidence * 100).toInt()}%',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                
-                                SizedBox(height: 16),
-                                
-                                // Calories prominently displayed
-                                Container(
-                                  padding: EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: Colors.green[50],
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.green[200]!),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            'Calories',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.grey[600],
-                                            ),
-                                          ),
-                                          Text(
-                                            '${result.calculatedTotalCalories.toInt()}',
-                                            style: TextStyle(
-                                              fontSize: 28,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.green[700],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.end,
-                                        children: [
-                                          Text(
-                                            'Weight',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.grey[600],
-                                            ),
-                                          ),
-                                          Text(
-                                            '${result.weight.toInt()}g',
-                                            style: TextStyle(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w600,
-                                              color: Colors.grey[700],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                
-                                SizedBox(height: 16),
-                                
-                                // Weight slider with better styling
-                                Text(
-                                  'Adjust portion size:',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.grey[700],
-                                  ),
-                                ),
-                                SizedBox(height: 8),
-                                SliderTheme(
-                                  data: SliderTheme.of(context).copyWith(
-                                    trackHeight: 6,
-                                    thumbShape: RoundSliderThumbShape(enabledThumbRadius: 12),
-                                    overlayShape: RoundSliderOverlayShape(overlayRadius: 20),
-                                  ),
-                                  child: Slider(
-                                    value: result.weight,
-                                    min: 10,
-                                    max: 500,
-                                    divisions: 49,
-                                    label: '${result.weight.round()}g',
-                                    onChanged: (value) => _updateWeight(index, value),
-                                    activeColor: Colors.green[600],
-                                    inactiveColor: Colors.green[100],
-                                  ),
-                                ),
-                                
-                                // Nutrition info with better layout
-                                if (result.nutrients != null) ...[
-                                  SizedBox(height: 16),
-                                  Text(
-                                    'Nutrition breakdown:',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.grey[700],
-                                    ),
-                                  ),
-                                  SizedBox(height: 12),
-                                  Row(
-                                    children: [
-                                      Expanded(child: _buildNutrientCard('Protein', '${result.nutrients!.adjustedProtein(result.weight).toInt()}g', Colors.red[100]!, Colors.red[700]!)),
-                                      SizedBox(width: 8),
-                                      Expanded(child: _buildNutrientCard('Carbs', '${result.nutrients!.adjustedCarbs(result.weight).toInt()}g', Colors.blue[100]!, Colors.blue[700]!)),
-                                    ],
-                                  ),
-                                  SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      Expanded(child: _buildNutrientCard('Fat', '${result.nutrients!.adjustedFat(result.weight).toInt()}g', Colors.orange[100]!, Colors.orange[700]!)),
-                                      SizedBox(width: 8),
-                                      Expanded(child: _buildNutrientCard('Fiber', '${result.nutrients!.adjustedFiber(result.weight).toInt()}g', Colors.green[100]!, Colors.green[700]!)),
-                                    ],
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        );
+                        return _buildEnhancedFoodCard(result, index);
                       },
                     ),
                   ),
                   
                   // Enhanced total calories summary
-                  Container(
-                    padding: EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Colors.green[100]!, Colors.green[50]!],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
+                  _buildEnhancedTotalSummary(),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEnhancedFoodCard(FoodResult result, int index) {
+    return Card(
+      margin: EdgeInsets.only(bottom: 16),
+      elevation: 4,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Enhanced header with database info
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        result.name,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[800],
+                        ),
                       ),
-                      border: Border(top: BorderSide(color: Colors.green[300]!, width: 2)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.green.withOpacity(0.1),
-                          spreadRadius: 1,
-                          blurRadius: 8,
-                          offset: Offset(0, -2),
+                      if (result.databaseMatch != null)
+                        Text(
+                          result.databaseMatch!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[600],
+                            fontStyle: FontStyle.italic,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ],
+                  ),
+                ),
+                Column(
+                  children: [
+                    _buildConfidenceBadge(result),
+                    SizedBox(height: 4),
+                    _buildDatabaseBadge(result),
+                  ],
+                ),
+              ],
+            ),
+            
+            SizedBox(height: 16),
+            
+            // Enhanced data source info
+            if (result.fdcId != null || result.ndbNumber != null)
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue[25],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[100]!),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.storage, size: 16, color: Colors.blue[700]),
+                        SizedBox(width: 6),
+                        Text(
+                          'USDA Database Match',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue[700],
+                          ),
                         ),
                       ],
                     ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Total Calories',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                            Text(
-                              'from ${_results.length} item${_results.length != 1 ? 's' : ''}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[500],
-                              ),
-                            ),
-                          ],
+                    SizedBox(height: 4),
+                    if (result.fdcId != null)
+                      Text('FDC ID: ${result.fdcId}', 
+                           style: TextStyle(fontSize: 11, color: Colors.blue[600])),
+                    if (result.ndbNumber != null && result.ndbNumber != 'N/A')
+                      Text('NDB: ${result.ndbNumber}', 
+                           style: TextStyle(fontSize: 11, color: Colors.blue[600])),
+                    if (result.usdaSearchResults != null)
+                      Text('${result.usdaSearchResults} database results found', 
+                           style: TextStyle(fontSize: 11, color: Colors.blue[600])),
+                  ],
+                ),
+              ),
+            
+            SizedBox(height: 16),
+            
+            // Calories prominently displayed
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.green[200]!),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Calories',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[600],
                         ),
+                      ),
+                      Text(
+                        '${result.calculatedTotalCalories.toInt()}',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        'Weight',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      Text(
+                        '${result.weight.toInt()}g',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            
+            SizedBox(height: 16),
+            
+            // Weight slider
+            Text(
+              'Adjust portion size:',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
+            ),
+            SizedBox(height: 8),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 6,
+                thumbShape: RoundSliderThumbShape(enabledThumbRadius: 12),
+                overlayShape: RoundSliderOverlayShape(overlayRadius: 20),
+              ),
+              child: Slider(
+                value: result.weight,
+                min: 10,
+                max: 500,
+                divisions: 49,
+                label: '${result.weight.round()}g',
+                onChanged: (value) => _updateWeight(index, value),
+                activeColor: Colors.green[600],
+                inactiveColor: Colors.green[100],
+              ),
+            ),
+            
+            // Enhanced nutrition info
+            if (result.nutrients != null) ...[
+              SizedBox(height: 16),
+              Text(
+                'Detailed nutrition breakdown:',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey[700],
+                ),
+              ),
+              SizedBox(height: 12),
+              _buildNutritionGrid(result),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConfidenceBadge(FoodResult result) {
+    Color badgeColor;
+    if (result.confidence > 0.7) {
+      badgeColor = Colors.green;
+    } else if (result.confidence > 0.5) {
+      badgeColor = Colors.orange;
+    } else {
+      badgeColor = Colors.red;
+    }
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: badgeColor,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        '${(result.confidence * 100).toInt()}%',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDatabaseBadge(FoodResult result) {
+    Color badgeColor;
+    String badgeText = result.databaseType;
+    
+    switch (result.databaseType) {
+      case 'Foundation':
+        badgeColor = Colors.purple;
+        break;
+      case 'SR Legacy':
+        badgeColor = Colors.blue;
+        break;
+      case 'Survey (FNDDS)':
+        badgeColor = Colors.teal;
+        badgeText = 'Survey';
+        break;
+      case 'Branded':
+        badgeColor = Colors.indigo;
+        break;
+      case 'Estimated':
+        badgeColor = Colors.grey;
+        break;
+      default:
+        badgeColor = Colors.grey;
+    }
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: badgeColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: badgeColor.withOpacity(0.3)),
+      ),
+      child: Text(
+        badgeText,
+        style: TextStyle(
+          color: badgeColor,
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNutritionGrid(FoodResult result) {
+    final nutrients = result.nutrients!;
+    final macroPercentages = nutrients.getMacroPercentages(result.weight);
+    
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _buildEnhancedNutrientCard(
+                'Protein', 
+                '${nutrients.adjustedProtein(result.weight).toInt()}g',
+                '${macroPercentages['protein']!.toInt()}%',
+                Colors.red[100]!, 
+                Colors.red[700]!
+              )
+            ),
+            SizedBox(width: 8),
+            Expanded(
+              child: _buildEnhancedNutrientCard(
+                'Carbs', 
+                '${nutrients.adjustedCarbs(result.weight).toInt()}g',
+                '${macroPercentages['carbs']!.toInt()}%',
+                Colors.blue[100]!, 
+                Colors.blue[700]!
+              )
+            ),
+          ],
+        ),
+        SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _buildEnhancedNutrientCard(
+                'Fat', 
+                '${nutrients.adjustedFat(result.weight).toInt()}g',
+                '${macroPercentages['fat']!.toInt()}%',
+                Colors.orange[100]!, 
+                Colors.orange[700]!
+              )
+            ),
+            SizedBox(width: 8),
+            Expanded(
+              child: _buildEnhancedNutrientCard(
+                'Fiber', 
+                '${nutrients.adjustedFiber(result.weight).toInt()}g',
+                '',
+                Colors.green[100]!, 
+                Colors.green[700]!
+              )
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEnhancedNutrientCard(String label, String value, String percentage, Color bgColor, Color textColor) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: textColor.withOpacity(0.3)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: textColor.withOpacity(0.8),
+            ),
+          ),
+          SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: textColor,
+            ),
+          ),
+          if (percentage.isNotEmpty) ...[
+            SizedBox(height: 2),
+            Text(
+              percentage,
+              style: TextStyle(
+                fontSize: 10,
+                color: textColor.withOpacity(0.7),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEnhancedTotalSummary() {
+    // Count database types
+    Map<String, int> dbCounts = {};
+    for (final result in _results) {
+      dbCounts[result.databaseType] = (dbCounts[result.databaseType] ?? 0) + 1;
+    }
+
+    return AnimatedContainer(
+      duration: Duration(milliseconds: 300),
+      child: Column(
+        children: [
+          // Always visible compact summary
+          GestureDetector(
+            onTap: _allowSummaryExpansion ? () {
+              setState(() {
+                _isTotalSummaryCollapsed = !_isTotalSummaryCollapsed;
+              });
+            } : () {
+              // Show a hint to scroll down
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Scroll down into results to view details'),
+                  duration: Duration(seconds: 2),
+                  backgroundColor: Colors.blue[600],
+                ),
+              );
+            },
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Colors.green[100]!, Colors.green[50]!],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                ),
+                border: Border(top: BorderSide(color: Colors.green[300]!, width: 1)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.green.withOpacity(0.1),
+                    spreadRadius: 1,
+                    blurRadius: 4,
+                    offset: Offset(0, -2),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  // Compact total display
+                  Expanded(
+                    child: Row(
+                      children: [
                         Container(
-                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                           decoration: BoxDecoration(
                             color: Colors.green[600],
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.green.withOpacity(0.3),
-                                spreadRadius: 1,
-                                blurRadius: 4,
-                                offset: Offset(0, 2),
-                              ),
-                            ],
+                            borderRadius: BorderRadius.circular(16),
                           ),
                           child: Text(
-                            '${_totalCalories.toInt()}',
+                            '${_totalCalories.toInt()} cal',
                             style: TextStyle(
-                              fontSize: 28,
+                              fontSize: 16,
                               fontWeight: FontWeight.bold,
                               color: Colors.white,
                             ),
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Text(
+                          '${_results.length} item${_results.length != 1 ? 's' : ''}',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Expand/collapse indicator with conditional styling and interaction
+                  AnimatedOpacity(
+                    duration: Duration(milliseconds: 300),
+                    opacity: _allowSummaryExpansion ? 1.0 : 0.6,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _allowSummaryExpansion 
+                              ? (_isTotalSummaryCollapsed ? 'Show Details' : 'Hide Details')
+                              : 'Scroll for Details',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _allowSummaryExpansion ? Colors.green[700] : Colors.grey[500],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        SizedBox(width: 4),
+                        AnimatedRotation(
+                          turns: (_isTotalSummaryCollapsed || !_allowSummaryExpansion) ? 0 : 0.5,
+                          duration: Duration(milliseconds: 300),
+                          child: Icon(
+                            _allowSummaryExpansion ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_down,
+                            color: _allowSummaryExpansion ? Colors.green[700] : Colors.grey[500],
+                            size: 20,
                           ),
                         ),
                       ],
@@ -841,6 +1167,123 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ],
               ),
             ),
+          ),
+          
+          // Collapsible detailed summary - only expand if allowed
+          AnimatedContainer(
+            duration: Duration(milliseconds: 300),
+            height: (_isTotalSummaryCollapsed || !_allowSummaryExpansion) ? 0 : null,
+            child: (_isTotalSummaryCollapsed || !_allowSummaryExpansion) 
+                ? null
+                : Container(
+                    padding: EdgeInsets.fromLTRB(20, 0, 20, 16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Colors.green[50]!, Colors.green[50]!.withOpacity(0.5)],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        SizedBox(height: 12),
+                        
+                        // Large calorie display
+                        Container(
+                          padding: EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.7),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.green[200]!),
+                          ),
+                          child: Column(
+                            children: [
+                              Text(
+                                'Total Calories',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                '${_totalCalories.toInt()}',
+                                style: TextStyle(
+                                  fontSize: 36,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.green[700],
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'from ${_results.length} food item${_results.length != 1 ? 's' : ''}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[500],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        
+                        SizedBox(height: 12),
+                        
+                        // Database source summary
+                        if (dbCounts.isNotEmpty) ...[
+                          Text(
+                            'Database Sources',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                          SizedBox(height: 8),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            children: dbCounts.entries.map((entry) {
+                              MaterialColor badgeColor;
+                              switch (entry.key) {
+                                case 'Foundation':
+                                  badgeColor = Colors.purple;
+                                  break;
+                                case 'SR Legacy':
+                                  badgeColor = Colors.blue;
+                                  break;
+                                case 'Survey (FNDDS)':
+                                  badgeColor = Colors.teal;
+                                  break;
+                                case 'Branded':
+                                  badgeColor = Colors.indigo;
+                                  break;
+                                default:
+                                  badgeColor = Colors.grey;
+                              }
+                              
+                              return Container(
+                                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: badgeColor.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: badgeColor.withOpacity(0.3)),
+                                ),
+                                child: Text(
+                                  '${entry.value}× ${entry.key}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: badgeColor[700],
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+          ),
         ],
       ),
     );
@@ -891,7 +1334,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
         SizedBox(height: 16),
 
-        // Analyze button
+        // Enhanced Analyze button
         if (_selectedImage != null && _results.isEmpty)
           Padding(
             padding: EdgeInsets.symmetric(horizontal: 16),
@@ -920,22 +1363,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ),
                           ),
                           SizedBox(width: 12),
-                          Text('Analyzing with AI...'),
+                          Text('Analyzing with Enhanced USDA...'),
                         ],
                       )
                     : Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.auto_awesome),
+                          Icon(Icons.science),
                           SizedBox(width: 8),
-                          Text('Analyze Food', style: TextStyle(fontSize: 16)),
+                          Text('Analyze with USDA Database', style: TextStyle(fontSize: 16)),
                         ],
                       ),
               ),
             ),
           ),
 
-        // Save button - only show when we have results
+        // Save button
         if (_results.isNotEmpty && _lastScanId == null)
           Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -964,7 +1407,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ),
                           ),
                           SizedBox(width: 8),
-                          Text('Saving...'),
+                          Text('Saving Enhanced Data...'),
                         ],
                       )
                     : Row(
@@ -972,7 +1415,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         children: [
                           Icon(Icons.save),
                           SizedBox(width: 8),
-                          Text('Save Scan'),
+                          Text('Save Enhanced Scan'),
                         ],
                       ),
               ),
@@ -997,7 +1440,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   Icon(Icons.check_circle, color: Colors.green[700]),
                   SizedBox(width: 8),
                   Text(
-                    'Scan Saved Successfully',
+                    'Enhanced Scan Saved Successfully',
                     style: TextStyle(
                       color: Colors.green[700],
                       fontWeight: FontWeight.w600,
@@ -1020,13 +1463,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Icon(
-            Icons.camera_alt_outlined,
+            Icons.science_outlined,
             size: 72,
             color: Colors.grey[400],
           ),
           SizedBox(height: 16),
           Text(
-            'Select a food image to analyze',
+            'Enhanced USDA Food Analysis',
             style: TextStyle(
               fontSize: 16,
               color: Colors.grey[600],
@@ -1036,44 +1479,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           SizedBox(height: 8),
           Text(
-            'Take a photo or choose from gallery',
+            'Comprehensive nutrition database search',
             style: TextStyle(
               fontSize: 14,
               color: Colors.grey[500],
             ),
             textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNutrientCard(String label, String value, Color bgColor, Color textColor) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: textColor.withOpacity(0.3)),
-      ),
-      child: Column(
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: textColor.withOpacity(0.8),
-            ),
-          ),
-          SizedBox(height: 2),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: textColor,
-            ),
           ),
         ],
       ),
